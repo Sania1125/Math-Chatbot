@@ -18,11 +18,7 @@ mathbot = "math_chatbot.cli:main"
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# 👇 This tells setuptools to include your math_chatbot package correctly
-[tool.setuptools]
-packages = ["math_chatbot"]
-
-# 👇 Optional (alternative auto-discovery, also fine to include)
+# Package discovery (ONE method only; this is enough)
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["math_chatbot*"]
