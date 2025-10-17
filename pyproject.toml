@@ -1,10 +1,10 @@
 [project]
 name = "math-chatbot"
 version = "1.0.0"
-description = "A small interactive math chatbot that safely evaluates arithmetic expressions and statistics."
+description = "A small interactive math chatbot that safely evaluates arithmetic expressions, functions, and statistics."
 readme = "README.md"
 requires-python = ">=3.9"
-authors = [{ name = "Your Name" }]
+authors = [{ name = "Sania Irshad" }]
 license = { text = "MIT" }
 dependencies = []
 
@@ -17,3 +17,12 @@ mathbot = "math_chatbot.cli:main"
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+
+# 👇 This tells setuptools to include your math_chatbot package correctly
+[tool.setuptools]
+packages = ["math_chatbot"]
+
+# 👇 Optional (alternative auto-discovery, also fine to include)
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["math_chatbot*"]
