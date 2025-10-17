@@ -16,6 +16,20 @@ def safe_eval(expr):
         return re.sub(r"(\d+(?:\.\d+)?)%", repl, s)
 
     expr = _replace_percentages(expr)
+    # Convert degree literals like '60°' to radians using numeric pi
+    expr = re.sub(r"(\d+(?:\.\d+)?)\s*°", lambda m: f"({m.group(1)} * {math.pi} / 180)", expr)
+    # Allow shorthand trig forms like 'sin60' or 'cos 45' -> convert to radians
+    expr = re.sub(r"\b(sin|cos|tan)\s*\(?\s*(-?\d+(?:\.\d+)?)\s*\)?",
+                  lambda m: f"{m.group(1)}({m.group(2)} * pi / 180)",
+                  expr,
+                  flags=re.IGNORECASE)
+
+    # convert trig calls with inner numeric expressions like sin(30+15) to degrees -> radians
+    # only convert when the inner expression contains digits/operators (no letters/functions)
+    expr = re.sub(r"\b(sin|cos|tan)\s*\(\s*([0-9\.\s\+\-\*\/\(\)]+)\s*\)",
+                  lambda m: f"{m.group(1)}(({m.group(2)}) * pi / 180)",
+                  expr,
+                  flags=re.IGNORECASE)
     allowed_operators = {
         ast.Add: operator.add,
         ast.Sub: operator.sub,
@@ -29,6 +43,7 @@ def safe_eval(expr):
         # basic
         'sqrt': math.sqrt,
         'pow': math.pow,
+    'radians': math.radians,
         # trig/log/exp
         'sin': math.sin,
         'cos': math.cos,
@@ -43,6 +58,12 @@ def safe_eval(expr):
         'mean': None,
         'avg': None,
         'median': None
+    }
+
+    # named constants available in expressions (pi, e)
+    allowed_names = {
+        'pi': math.pi,
+        'e': math.e
     }
 
     # implement mean/avg/median using local helpers
@@ -73,6 +94,11 @@ def safe_eval(expr):
                 return node.value
             else:
                 raise ValueError("Invalid constant")
+        elif isinstance(node, ast.Name):
+            if node.id in allowed_names:
+                return allowed_names[node.id]
+            else:
+                raise ValueError(f"Unsupported name: {node.id}")
         elif isinstance(node, ast.List) or isinstance(node, ast.Tuple):
             return [eval_node(elt) for elt in node.elts]
         elif isinstance(node, ast.BinOp):
