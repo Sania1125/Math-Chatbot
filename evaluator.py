@@ -1,24 +1,25 @@
 # math_chatbot/evaluator.py
 from __future__ import annotations
+
 import ast
 import operator
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Sequence, Union
+from typing import Any, Callable, Dict, List, Sequence, Union, Optional
 
 Number = Union[int, float]
 
-# ---- configuration ---------------------------------------------------------
+# ---------------- Configuration ----------------
 
-MAX_POWER_EXPONENT = 12         # safety: cap huge exponentiations
-MAX_FACTORIAL_N = 200           # safety: block gigantic factorials
-ANGLE_MODE_DEFAULT = "rad"      # "deg" or "rad"
+MAX_POWER_EXPONENT = 12          # safety cap for **
+MAX_FACTORIAL_N = 200            # safety cap for factorial(n)
+ANGLE_MODE_DEFAULT = "rad"       # "deg" or "rad"
 
-# ---- utilities -------------------------------------------------------------
+# ---------------- Preprocessors ----------------
 
 def _replace_percentages(s: str) -> str:
-    """Turn '50%' -> '0.5' and '12.5%' -> '0.125'."""
+    """Convert '50%' -> '0.5' (also supports decimals like '12.5%')."""
     def repl(m):
         num = float(m.group(1))
         return str(num / 100.0)
@@ -26,18 +27,20 @@ def _replace_percentages(s: str) -> str:
 
 def _normalize_trig_shorthand(expr: str, angle_mode: str) -> str:
     """
-    Support 'sin60' or 'cos 45' and optional '°'.
-    If angle_mode == 'deg', bare numbers to trig are treated as degrees.
-    Explicit '°' always means degrees regardless of angle_mode.
+    Supports:
+      - Degree symbol: 60° -> (60 * pi / 180)
+      - Shorthand: sin60 / cos 45 (no parentheses)
+      - If angle_mode == 'deg', bare numeric args to sin/cos/tan are treated as degrees.
+      - sin(30+15) handled in deg mode (inner numeric expression converted to radians).
     """
-    # convert '60°' -> '(60 * pi / 180)'
+    # explicit degree symbol always means degrees
     expr = re.sub(
         r"(\d+(?:\.\d+)?)\s*°",
         lambda m: f"({m.group(1)} * pi / 180)",
-        expr
+        expr,
     )
 
-    # 'sin60' or 'cos 45' (no parentheses)
+    # sin60 / cos 45 (no parens)
     def shorthand_to_call(m):
         fn, num = m.group(1), m.group(2)
         if angle_mode == "deg":
@@ -48,20 +51,20 @@ def _normalize_trig_shorthand(expr: str, angle_mode: str) -> str:
         r"\b(sin|cos|tan)\s*\(?\s*(-?\d+(?:\.\d+)?)\s*\)?",
         shorthand_to_call,
         expr,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
 
-    # If user wrote sin(30+15) and angle_mode is deg, convert inside to radians.
+    # sin(30+15) -> convert inside if in deg mode (numbers/operators only)
     if angle_mode == "deg":
         expr = re.sub(
             r"\b(sin|cos|tan)\s*\(\s*([0-9\.\s\+\-\*\/\(\)]+)\s*\)",
             lambda m: f"{m.group(1)}(({m.group(2)}) * pi / 180)",
             expr,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
     return expr
 
-# ---- evaluator -------------------------------------------------------------
+# ---------------- Allowed Ops & Funcs ----------------
 
 _ALLOWED_BIN_OPS: Dict[type, Callable[[Number, Number], Number]] = {
     ast.Add: operator.add,
@@ -95,13 +98,14 @@ def _variance(values: Sequence[Number], ddof: int = 0) -> float:
     if not values:
         raise ValueError("var() requires at least one value")
     m = _mean(values)
-    return float(sum((x - m) ** 2 for x in values)) / (len(values) - ddof or 1)
+    denom = (len(values) - ddof) if (len(values) - ddof) != 0 else 1
+    return float(sum((x - m) ** 2 for x in values)) / denom
 
 def _std(values: Sequence[Number], ddof: int = 0) -> float:
     return math.sqrt(_variance(values, ddof=ddof))
 
 _ALLOWED_FUNCS_BASE: Dict[str, Callable[..., Number]] = {
-    # arithmetic
+    # arithmetic & rounding
     "sqrt": math.sqrt,
     "pow": math.pow,
     "abs": abs,
@@ -114,7 +118,7 @@ _ALLOWED_FUNCS_BASE: Dict[str, Callable[..., Number]] = {
     "cos": math.cos,
     "tan": math.tan,
     "radians": math.radians,
-    "log": math.log,   # natural log; log(x, base) supported by math.log
+    "log": math.log,   # natural log; log(x, base) supported
     "ln": math.log,
     "exp": math.exp,
 
@@ -128,22 +132,26 @@ _ALLOWED_FUNCS_BASE: Dict[str, Callable[..., Number]] = {
     "var": _variance,
     "std": _std,
 
-    # combinatorics / factorial (guarded)
+    # combinatorics
     "factorial": math.factorial,
 }
 
 _ALLOWED_NAMES = {
     "pi": math.pi,
-    "e": math.e
+    "e": math.e,
 }
+
+# ---------------- Result Model ----------------
 
 @dataclass
 class EvalResult:
     success: bool
     result: Any = None
-    error: str | None = None
-    message: str | None = None
-    input: str | None = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+    input: Optional[str] = None
+
+# ---------------- Evaluator ----------------
 
 class SafeEvaluator:
     def __init__(self, angle_mode: str = ANGLE_MODE_DEFAULT):
@@ -151,8 +159,8 @@ class SafeEvaluator:
             raise ValueError("angle_mode must be 'deg' or 'rad'")
         self.angle_mode = angle_mode
 
+    # ---- safety checks ----
     def _assert_safe_pow(self, left: Number, right: Number):
-        # cap huge exponentiations to avoid DoS (e.g., 9**9**9)
         if isinstance(right, (int, float)) and abs(right) > MAX_POWER_EXPONENT:
             raise ValueError(f"Exponent too large (> {MAX_POWER_EXPONENT})")
 
@@ -162,12 +170,14 @@ class SafeEvaluator:
         if n > MAX_FACTORIAL_N:
             raise ValueError(f"factorial() capped at {MAX_FACTORIAL_N}")
 
+    # ---- normalization ----
     def _normalize(self, expr: str) -> str:
         expr = expr.strip()
         expr = _replace_percentages(expr)
         expr = _normalize_trig_shorthand(expr, self.angle_mode)
         return expr
 
+    # ---- AST evaluation ----
     def _eval_node(self, node: ast.AST) -> Any:
         if isinstance(node, ast.Constant):
             if isinstance(node.value, (int, float)):
@@ -195,42 +205,57 @@ class SafeEvaluator:
             return _ALLOWED_BIN_OPS[type(node.op)](left, right)
 
         if isinstance(node, ast.Call):
-            # allow only simple f(x, y, ...) with Name, no attrs/kwargs
+            # only allow simple Name(...) calls, no attributes or keywords
             if not isinstance(node.func, ast.Name):
                 raise ValueError("Unsupported function call")
             fname = node.func.id
             if fname not in _ALLOWED_FUNCS_BASE:
                 raise ValueError(f"Unsupported function: {fname}")
-
             if node.keywords:
                 raise ValueError("Keyword arguments are not allowed")
 
             args = [self._eval_node(a) for a in node.args]
-
-            # flatten single list for varargs functions (mean, median, min, max, sum, var, std)
             vararg_funcs = {"mean", "avg", "median", "min", "max", "sum", "var", "std"}
+
+            # flatten single list for vararg-style functions
             values = args[0] if (len(args) == 1 and isinstance(args[0], list) and fname in vararg_funcs) else args
+
+            if fname == "sqrt":
+                if len(values) != 1:
+                    raise ValueError("sqrt() takes exactly one argument")
+                if values[0] < 0:
+                    raise ValueError("Square root of negative number is not allowed")
 
             if fname == "factorial":
                 if len(values) != 1:
                     raise ValueError("factorial() takes exactly one argument")
                 self._assert_safe_factorial(values[0])
 
-            return _ALLOWED_FUNCS_BASE[fname](*values)
+            if fname == "pow":
+                if len(values) != 2:
+                    raise ValueError("pow() takes exactly two arguments")
+                self._assert_safe_pow(values[0], values[1])
 
-        # Explicitly forbid comprehensions, lambdas, attributes, subscripts, etc.
+            try:
+                return _ALLOWED_FUNCS_BASE[fname](*values)
+            except TypeError:
+                raise ValueError(f"Invalid arguments for function '{fname}'")
+
+        # Forbid unsafe / non-numeric constructs explicitly
         forbidden = (
             ast.Attribute, ast.Subscript, ast.Lambda, ast.Dict, ast.Set,
             ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
             ast.BoolOp, ast.Compare, ast.IfExp, ast.Assign, ast.AugAssign,
             ast.While, ast.For, ast.With, ast.Return, ast.FunctionDef,
-            ast.ClassDef, ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal
+            ast.ClassDef, ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal,
+            ast.Try, ast.Raise
         )
         if isinstance(node, forbidden):
             raise ValueError("Unsupported syntax")
 
         raise ValueError("Invalid expression")
 
+    # ---- public API ----
     def safe_eval(self, expr: str) -> Any:
         norm = self._normalize(expr)
         node = ast.parse(norm, mode="eval").body
