@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: ["**"]          # run on ANY branch (incl. feature branches)
   pull_request:
-    branches: [ main, master ]
+    branches: ["**"]          # run for PRs to any branch
+  workflow_dispatch:           # adds the "Run workflow" button
 
 jobs:
   test:
